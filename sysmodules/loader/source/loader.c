@@ -143,7 +143,7 @@ static Result loadCode(u64 titleId, prog_addrs_t *shared, u64 programHandle, int
 
     ExHeader_CodeSetInfo *csi = &g_exheaderInfo.sci.codeset_info;
 
-    patchCode(titleId, csi->flags.remaster_version, (u8 *)shared->text_addr, shared->total_size << 12, csi->text.size, csi->rodata.size, csi->data.size, csi->rodata.address, csi->data.address);
+    patchCode(titleId, csi->flags.remaster_version, (u8 *)shared->text_addr, shared->total_size << 12, csi->text.size, csi->rodata.size, csi->data.size, csi->rodata.address, csi->data.address, size);
 
     return 0;
 }

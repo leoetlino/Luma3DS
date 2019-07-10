@@ -8,6 +8,7 @@
 extern "C" {
 #include <3ds/result.h>
 #include <3ds/services/fs.h>
+#include <3ds/svc.h>
 
 #include "patcher.h"
 #include "strings.h"
@@ -119,11 +120,8 @@ Number Decode(fs::File& file) {
 // A simple BPS patch applier.
 class PatchApplier {
 public:
-  PatchApplier(u8* code, u32 size, fs::File& file) : m_target{code}, m_size{size}, m_patch{file} {}
-  ~PatchApplier() {
-    m_source.Close();
-    fs::DeleteFile(TemporaryCodePath);
-  }
+  PatchApplier(u8* code, u32 size, fs::File& patch, fs::File& source)
+      : m_target{code}, m_size{size}, m_patch{patch}, m_source{source} {}
 
   bool Apply();
 
@@ -161,7 +159,8 @@ private:
   bool SourceCopy(Number length) {
     const Number data = Decode(m_patch);
     m_source_relative_offset += (data & 1 ? -1 : +1) * (data >> 1);
-    const bool ok = m_source.SeekAndRead(m_target + m_output_offset, length, m_source_relative_offset);
+    const bool ok =
+        m_source.SeekAndRead(m_target + m_output_offset, length, m_source_relative_offset);
     m_output_offset += length;
     m_source_relative_offset += length;
     return ok;
@@ -175,25 +174,16 @@ private:
     return true;
   }
 
-  bool Init() {
-    if (!m_source.Open(TemporaryCodePath, FS_OPEN_READ | FS_OPEN_WRITE | FS_OPEN_CREATE))
-      return false;
-    return m_source.Write(m_target, m_size);
-  }
-
   u8* m_target = nullptr;
   u32 m_size = 0;
   fs::File& m_patch;
-  fs::File m_source;
+  fs::File& m_source;
   u32 m_output_offset = 0;
   u32 m_source_relative_offset = 0;
   u32 m_target_relative_offset = 0;
 };
 
 bool PatchApplier::Apply() {
-  if (!Init())
-    return false;
-
   char magic[4];
   if (!m_patch.Read(magic) || std::string_view(magic, 4) != "BPS1")
     return false;
@@ -224,21 +214,34 @@ bool PatchApplier::Apply() {
 
 }  // namespace bps
 
-inline bool ApplyCodeBpsPatch(u64 progId, u8* code, u32 size) {
+inline bool ApplyCodeBpsPatch(u64 progId, u8* code, u32 size, u64 originalCodeSize) {
   char bps_path[] = "/luma/titles/0000000000000000/code.bps";
   progIdToStr(bps_path + 28, progId);
   fs::File bps_file;
   if (!bps_file.Open(bps_path, FS_OPEN_READ))
     return true;
 
-  bps::PatchApplier applier{code, size, bps_file};
+  // For troubleshooting purposes -- and also to patch the game in-place.
+  fs::DeleteFile(TemporaryCodePath);
+  fs::File source_file;
+  if (!source_file.Open(TemporaryCodePath, FS_OPEN_READ | FS_OPEN_WRITE | FS_OPEN_CREATE)) {
+    svcBreak(USERBREAK_PANIC);
+    return false;
+  }
+
+  if (!source_file.Write(code, originalCodeSize)) {
+    svcBreak(USERBREAK_PANIC);
+    return false;
+  }
+
+  bps::PatchApplier applier{code, size, bps_file, source_file};
   return applier.Apply();
 }
 
 }  // namespace patcher
 
 extern "C" {
-bool patcherApplyCodeBpsPatch(u64 progId, u8* code, u32 size) {
-  return patcher::ApplyCodeBpsPatch(progId, code, size);
+bool patcherApplyCodeBpsPatch(u64 progId, u8* code, u32 size, u64 originalCodeSize) {
+  return patcher::ApplyCodeBpsPatch(progId, code, size, originalCodeSize);
 }
 }
