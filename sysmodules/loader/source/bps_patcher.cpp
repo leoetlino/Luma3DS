@@ -14,6 +14,8 @@ extern "C" {
 #include "strings.h"
 }
 
+#include "Crc32.h"
+
 namespace patcher {
 
 constexpr const char TemporaryCodePath[] = "/luma/loader_tmp_code.bin";
@@ -189,7 +191,6 @@ bool PatchApplier::Apply() {
     return false;
 
   const Number source_size = Decode(m_patch);
-  (void)source_size;
   const Number target_size = Decode(m_patch);
   const Number metadata_size = Decode(m_patch);
   if (target_size > m_size)
@@ -201,13 +202,33 @@ bool PatchApplier::Apply() {
   if (patch_size < 12)
     return false;
 
+  // Read source and target checksums
+  const u64 command_start_offset = m_patch.offset;
+  m_patch.offset = patch_size - 12;
+  u32 source_crc32, target_crc32;
+  if (!m_patch.Read(source_crc32) || !m_patch.Read(target_crc32))
+    return false;
+  m_patch.offset = command_start_offset;
+
+  // Ensure that the correct executable is being patched
+  if (crc32_fast(m_target, source_size) != source_crc32) {
+    svcBreak(USERBREAK_USER);
+    return false;
+  }
+
+  memset(m_target, 0, m_size);
+
   while (m_patch.offset < patch_size - 12) {
     const bool ok = HandleCommand();
     if (!ok)
       return false;
   }
 
-  // Ignore the checksums.
+  // Ensure that the target contains the expected data
+  if (crc32_fast(m_target, target_size) != target_crc32) {
+    svcBreak(USERBREAK_ASSERT);
+    return false;
+  }
 
   return true;
 }
@@ -225,7 +246,7 @@ inline bool ApplyCodeBpsPatch(u64 progId, u8* code, u32 size, u64 originalCodeSi
   fs::DeleteFile(TemporaryCodePath);
   fs::File source_file;
   if (!source_file.Open(TemporaryCodePath, FS_OPEN_READ | FS_OPEN_WRITE | FS_OPEN_CREATE)) {
-    svcBreak(USERBREAK_PANIC);
+    svcBreak(USERBREAK_ASSERT);
     return false;
   }
 
